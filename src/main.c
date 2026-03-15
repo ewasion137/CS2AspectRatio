@@ -63,8 +63,18 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
 
     if (addr) {
         printf("Found function at: %p\n", (void*)addr);
-        MH_CreateHook((void*)addr, &CreateViewRender_Hook, (void**)&oCreateViewRender);
-        MH_EnableHook((void*)addr);
+        
+        MH_STATUS status = MH_CreateHook((void*)addr, &CreateViewRender_Hook, (void**)&oCreateViewRender);
+        if (status != MH_OK) {
+            printf("MH_CreateHook failed! Code: %d\n", status);
+        }
+        
+        status = MH_EnableHook((void*)addr);
+        if (status != MH_OK) {
+            printf("MH_EnableHook failed! Code: %d\n", status);
+        } else {
+            printf("Hook enabled successfully!\n");
+        }
     } else {
         printf("Failed to find pattern!\n");
     }
