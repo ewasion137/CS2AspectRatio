@@ -1,13 +1,16 @@
 CC = gcc
-# -shared создает DLL
-# -m64 указывает, что собираем под 64-бита (так как CS2 — это x64)
-# -luser32 нужно, чтобы линковать MessageBox
-CFLAGS = -shared -m64 
-LIBS = -luser32
+CFLAGS = -shared -m64 -I./include -I./minhook
 TARGET = CS2AspectRatio.dll
 
+# Собираем всё: наш файл, файлы MinHook и файлы внутри hde
+SRC = src/main.c \
+      minhook/buffer.c \
+      minhook/hook.c \
+      minhook/trampoline.c \
+      minhook/hde/hde64.c
+
 all:
-	$(CC) $(CFLAGS) src/main.c -o $(TARGET) $(LIBS)
+	$(CC) $(CFLAGS) $(SRC) -o $(TARGET) -luser32 -lpsapi
 
 clean:
 	del /f $(TARGET)

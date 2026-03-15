@@ -1,73 +1,89 @@
 #include <windows.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include "MinHook.h" // Убедись, что путь к инклудам правильный
+#include <psapi.h>
 
-#define VIEW_MATRIX_OFFSET 0x230EF20
-HMODULE hModule; // Храним хендл для выгрузки
-bool is_stretching = false; // Состояние чита
+// Структура рендера (из твоего источника)
+struct CViewRender {
+    unsigned char pad0[0x528];
+    float flAspectRatio;
+    unsigned char pad1[0x71];
+    unsigned char nSomeFlags;
+};
 
-// Функция, которая постоянно "долбит" память
-void ApplyStretch() {
-    uintptr_t client_base = (uintptr_t)GetModuleHandleA("client.dll");
-    if (!client_base) return;
+// Указатель на оригинал
+void* (*oCreateViewRender)(struct CViewRender* pViewRender);
 
-    // Сдвиг к матрице
-    float* matrix = (float*)(client_base + VIEW_MATRIX_OFFSET);
-
-    DWORD old_protect;
-    VirtualProtect(matrix, 64, PAGE_EXECUTE_READWRITE, &old_protect);
-
-    // ПОПРОБУЙ ЭТИ ВАРИАНТЫ ПО ОЧЕРЕДИ:
+// Наш хук
+void* __fastcall CreateViewRender_Hook(struct CViewRender* pViewRender) {
+    void* ret = oCreateViewRender(pViewRender);
     
-    // 1. Умножаем текущее значение (более "мягкий" способ)
-    if (is_stretching) {
-        matrix[0] *= 1.5f; // Попробуй matrix[0]
-        // matrix[5] *= 1.5f; // Если [0] не сработает, закомментируй [0] и раскомментируй [5]
-    }
+    // Растягиваем
+    pViewRender->flAspectRatio = 1.3f; 
+    pViewRender->nSomeFlags |= 2;
+    
+    return ret;
+}
 
-    VirtualProtect(matrix, 64, old_protect, &old_protect);
+// Простой сканер сигнатуры (ищет адрес функции по байтам)
+uintptr_t FindPattern(const char* module_name, const char* pattern, const char* mask) {
+    HMODULE hModule = GetModuleHandleA(module_name);
+    MODULEINFO modInfo;
+    GetModuleInformation(GetCurrentProcess(), hModule, &modInfo, sizeof(MODULEINFO));
+    
+    uintptr_t start = (uintptr_t)modInfo.lpBaseOfDll;
+    uintptr_t end = start + modInfo.SizeOfImage;
+
+    for (uintptr_t i = start; i < end; i++) {
+        bool found = true;
+        for (size_t j = 0; j < strlen(mask); j++) {
+            if (mask[j] != '?' && ((unsigned char*)i)[j] != ((unsigned char*)pattern)[j]) {
+                found = false;
+                break;
+            }
+        }
+        if (found) return i;
+    }
+    return 0;
 }
 
 DWORD WINAPI MainThread(LPVOID lpParam) {
     AllocConsole();
     freopen("CONOUT$", "w", stdout);
-    printf("Cheat Loaded! Press INSERT to Toggle, DELETE to Unload.\n");
 
-    while (1) {
-        // Toggle (Вкл/Выкл)
-        if (GetAsyncKeyState(VK_INSERT) & 1) {
-            is_stretching = !is_stretching;
-            printf("Stretching: %s\n", is_stretching ? "ON" : "OFF");
-        }
+    // 1. Инициализация MinHook
+    if (MH_Initialize() != MH_OK) return 0;
 
-        // Выгрузка
-        if (GetAsyncKeyState(VK_DELETE) & 1) {
-            printf("Unloading...\n");
-            // Возвращаем матрицу в нормальное состояние перед выходом
-            is_stretching = false;
-            ApplyStretch();
-            break; // Выходим из цикла
-        }
+    // 2. Поиск адреса функции (используем сигнатуру из твоего UC)
+    // "48 89 5C 24 10 48 89 6C 24 18 56 57 41 56 48 83 EC"
+    const char* sig = "\x48\x89\x5C\x24\x10\x48\x89\x6C\x24\x18\x56\x57\x41\x56\x48\x83\xEC";
+    const char* mask = "?????????????????";
+    uintptr_t addr = FindPattern("client.dll", sig, mask);
 
-        // Постоянно применяем патч, если включено
-        if (is_stretching) {
-            ApplyStretch();
-        }
-
-        Sleep(10); // Спим чуть-чуть, чтобы не грузить проц на 100%
+    if (addr) {
+        printf("Found function at: %p\n", (void*)addr);
+        MH_CreateHook((void*)addr, &CreateViewRender_Hook, (void**)&oCreateViewRender);
+        MH_EnableHook((void*)addr);
+    } else {
+        printf("Failed to find pattern!\n");
     }
 
-    // Правильная выгрузка
+    // Ожидание DEL для выгрузки
+    while (!(GetAsyncKeyState(VK_DELETE) & 1)) {
+        Sleep(100);
+    }
+
+    MH_DisableHook(MH_ALL_HOOKS);
+    MH_Uninitialize();
     FreeConsole();
-    FreeLibraryAndExitThread(hModule, 0);
+    FreeLibraryAndExitThread((HMODULE)lpParam, 0);
     return 0;
 }
 
-BOOL APIENTRY DllMain(HMODULE hDllModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
-        hModule = hDllModule; // Сохраняем хендл
-        CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)MainThread, NULL, 0, NULL);
+        CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)MainThread, hModule, 0, NULL);
     }
     return TRUE;
 }
