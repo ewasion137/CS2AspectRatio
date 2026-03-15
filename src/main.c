@@ -17,13 +17,17 @@ void* (*oCreateViewRender)(struct CViewRender* pViewRender);
 
 // Наш хук
 void* __fastcall CreateViewRender_Hook(struct CViewRender* pViewRender) {
-    void* ret = oCreateViewRender(pViewRender);
+    // Выводим раз в 100 кадров, чтобы не убить производительность
+    static int counter = 0;
+    if (counter++ % 100 == 0) {
+        printf("Hook Hit! AspectRatio currently: %f\n", pViewRender->flAspectRatio);
+    }
     
-    // Растягиваем
-    pViewRender->flAspectRatio = 1.3f; 
+    // Делаем изменения
+    pViewRender->flAspectRatio = 2.5f; // Поставим 2.5, чтобы было ОЧЕНЬ заметно
     pViewRender->nSomeFlags |= 2;
     
-    return ret;
+    return oCreateViewRender(pViewRender);
 }
 
 // Простой сканер сигнатуры (ищет адрес функции по байтам)
