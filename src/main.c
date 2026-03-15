@@ -31,14 +31,9 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
 
 // ТОЧКА ВХОДА (Вот где должен быть твой switch)
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
-    switch (ul_reason_for_call) {
-    case DLL_PROCESS_ATTACH:
-        // Создаем поток, чтобы не блокировать игру при загрузке
+    if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
+        MessageBoxA(NULL, "DLL Injected!", "Status", MB_OK); // ЭТОТ МЕССЕЙДЖ ДОЛЖЕН ПОЯВИТЬСЯ
         CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)MainThread, NULL, 0, NULL);
-        break;
-        
-    case DLL_PROCESS_DETACH:
-        break;
     }
     return TRUE;
 }
