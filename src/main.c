@@ -12,14 +12,19 @@ void ApplyStretch() {
     uintptr_t client_base = (uintptr_t)GetModuleHandleA("client.dll");
     if (!client_base) return;
 
+    // Сдвиг к матрице
     float* matrix = (float*)(client_base + VIEW_MATRIX_OFFSET);
 
-    // Защита памяти
     DWORD old_protect;
     VirtualProtect(matrix, 64, PAGE_EXECUTE_READWRITE, &old_protect);
 
-    // Если включено - пишем 1.5f, если выключено - 1.0f (стандарт)
-    matrix[0] = is_stretching ? 1.5f : 1.0f; 
+    // ПОПРОБУЙ ЭТИ ВАРИАНТЫ ПО ОЧЕРЕДИ:
+    
+    // 1. Умножаем текущее значение (более "мягкий" способ)
+    if (is_stretching) {
+        matrix[0] *= 1.5f; // Попробуй matrix[0]
+        // matrix[5] *= 1.5f; // Если [0] не сработает, закомментируй [0] и раскомментируй [5]
+    }
 
     VirtualProtect(matrix, 64, old_protect, &old_protect);
 }
