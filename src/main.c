@@ -6,7 +6,7 @@
 #include "MinHook.h"
 
 // Переменная для настройки (можешь потом вынести в конфиг)
-float my_aspect_ratio = 2.0f;
+float my_aspect_ratio = 35.0f;
 
 // Оригинальная функция, которую мы перехватим
 typedef float (__fastcall* GetAspectRatio_t)(void* rcx, int width, int height);
