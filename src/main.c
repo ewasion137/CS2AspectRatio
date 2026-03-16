@@ -1,53 +1,45 @@
 #include <windows.h>
-#include <stdio.h>
-#include <stdbool.h>
-#include "MinHook.h" // Убедись, что путь к инклудам правильный
 #include <psapi.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include "MinHook.h"
 
-// Структура рендера (из твоего источника)
-struct CViewRender {
-    unsigned char pad0[0x528];
-    float flAspectRatio;
-    unsigned char pad1[0x71];
-    unsigned char nSomeFlags;
-};
+// Переменная для настройки (можешь потом вынести в конфиг)
+float my_aspect_ratio = 2.0f;
 
-// Указатель на оригинал
-void* (*oCreateViewRender)(struct CViewRender* pViewRender);
+// Оригинальная функция, которую мы перехватим
+typedef float (__fastcall* GetAspectRatio_t)(void* rcx, int width, int height);
+GetAspectRatio_t oGetAspectRatio = NULL;
 
-// Наш хук
-void* __fastcall CreateViewRender_Hook(struct CViewRender* pViewRender) {
-    // Выводим раз в 100 кадров, чтобы не убить производительность
-    static int counter = 0;
-    if (counter++ % 100 == 0) {
-        printf("Hook Hit! AspectRatio currently: %f\n", pViewRender->flAspectRatio);
-    }
-    
-    // Делаем изменения
-    pViewRender->flAspectRatio = 2.5f; // Поставим 2.5, чтобы было ОЧЕНЬ заметно
-    pViewRender->nSomeFlags |= 2;
-    
-    return oCreateViewRender(pViewRender);
+// Наш Хук-заменитель
+float __fastcall Hooked_GetAspectRatio(void* rcx, int width, int height) {
+    // Если мы хотим выключить чит, можем вернуть оригинал:
+    // return oGetAspectRatio(rcx, width, height);
+
+    return my_aspect_ratio; // Возвращаем наше кастомное значение
 }
 
-// Простой сканер сигнатуры (ищет адрес функции по байтам)
-uintptr_t FindPattern(const char* module_name, const char* pattern, const char* mask) {
-    HMODULE hModule = GetModuleHandleA(module_name);
-    MODULEINFO modInfo;
-    GetModuleInformation(GetCurrentProcess(), hModule, &modInfo, sizeof(MODULEINFO));
-    
-    uintptr_t start = (uintptr_t)modInfo.lpBaseOfDll;
-    uintptr_t end = start + modInfo.SizeOfImage;
+// Надежный сканер паттернов
+uintptr_t FindPattern(const char* module, const char* pattern, const char* mask) {
+    HMODULE hMod = GetModuleHandleA(module);
+    if (!hMod) return 0;
 
-    for (uintptr_t i = start; i < end; i++) {
+    MODULEINFO info;
+    GetModuleInformation(GetCurrentProcess(), hMod, &info, sizeof(info));
+    uintptr_t start = (uintptr_t)info.lpBaseOfDll;
+    uintptr_t size = (uintptr_t)info.SizeOfImage;
+
+    size_t pattern_len = strlen(mask);
+    for (uintptr_t i = 0; i < size - pattern_len; i++) {
         bool found = true;
-        for (size_t j = 0; j < strlen(mask); j++) {
-            if (mask[j] != '?' && ((unsigned char*)i)[j] != ((unsigned char*)pattern)[j]) {
+        for (size_t j = 0; j < pattern_len; j++) {
+            if (mask[j] != '?' && ((uint8_t*)(start + i))[j] != ((uint8_t*)pattern)[j]) {
                 found = false;
                 break;
             }
         }
-        if (found) return i;
+        if (found) return start + i;
     }
     return 0;
 }
@@ -56,38 +48,51 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
     AllocConsole();
     freopen("CONOUT$", "w", stdout);
 
-    // 1. Инициализация MinHook
-    if (MH_Initialize() != MH_OK) return 0;
+    printf("[*] CS2 Aspect Ratio - Elite Refactor\n");
+    printf("[*] Initializing MinHook...\n");
 
-    // 2. Поиск адреса функции (используем сигнатуру из твоего UC)
-    // "48 89 5C 24 10 48 89 6C 24 18 56 57 41 56 48 83 EC"
-    const char* sig = "\x48\x89\x5C\x24\x10\x48\x89\x6C\x24\x18\x56\x57\x41\x56\x48\x83\xEC";
-    const char* mask = "?????????????????";
-    uintptr_t addr = FindPattern("client.dll", sig, mask);
-
-    if (addr) {
-        printf("Found function at: %p\n", (void*)addr);
-        
-        MH_STATUS status = MH_CreateHook((void*)addr, &CreateViewRender_Hook, (void**)&oCreateViewRender);
-        if (status != MH_OK) {
-            printf("MH_CreateHook failed! Code: %d\n", status);
-        }
-        
-        status = MH_EnableHook((void*)addr);
-        if (status != MH_OK) {
-            printf("MH_EnableHook failed! Code: %d\n", status);
-        } else {
-            printf("Hook enabled successfully!\n");
-        }
-    } else {
-        printf("Failed to find pattern!\n");
+    if (MH_Initialize() != MH_OK) {
+        printf("[!] Failed to initialize MinHook\n");
+        return 0;
     }
 
-    // Ожидание DEL для выгрузки
+    // Сигнатура функции GetAspectRatio в engine2.dll
+    // 48 89 5C 24 ? 57 48 83 EC ? 8B FA 48 8D 0D
+    const char* pattern = "\x48\x89\x5C\x24\x00\x57\x48\x83\xEC\x00\x8B\xFA\x48\x8D\x0D";
+    const char* mask    = "xxxx?xxxx?xxxxx";
+
+    uintptr_t target_addr = FindPattern("engine2.dll", pattern, mask);
+
+    if (target_addr) {
+        printf("[+] Found target at: %p\n", (void*)target_addr);
+
+        if (MH_CreateHook((void*)target_addr, &Hooked_GetAspectRatio, (void**)&oGetAspectRatio) == MH_OK) {
+            MH_EnableHook((void*)target_addr);
+            printf("[SUCCESS] Aspect Ratio Hook enabled!\n");
+        } else {
+            printf("[!] Failed to create hook.\n");
+        }
+    } else {
+        printf("[ERROR] Could not find signature in engine2.dll!\n");
+        printf("[TIP] Check if the game updated or search for signature manually in CE.\n");
+    }
+
+    printf("[*] Press DELETE to unload.\n");
+
     while (!(GetAsyncKeyState(VK_DELETE) & 1)) {
+        // Здесь можно добавить управление на стрелочки:
+        if (GetAsyncKeyState(VK_UP) & 1) {
+            my_aspect_ratio += 0.1f;
+            printf("Current AR: %.2f\n", my_aspect_ratio);
+        }
+        if (GetAsyncKeyState(VK_DOWN) & 1) {
+            my_aspect_ratio -= 0.1f;
+            printf("Current AR: %.2f\n", my_aspect_ratio);
+        }
         Sleep(100);
     }
 
+    printf("[*] Unloading...\n");
     MH_DisableHook(MH_ALL_HOOKS);
     MH_Uninitialize();
     FreeConsole();
@@ -95,9 +100,10 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
     return 0;
 }
 
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
-    if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
-        CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)MainThread, hModule, 0, NULL);
+BOOL APIENTRY DllMain(HMODULE hMod, DWORD reason, LPVOID res) {
+    if (reason == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(hMod);
+        CreateThread(0, 0, (LPTHREAD_START_ROUTINE)MainThread, hMod, 0, 0);
     }
-    return TRUE;
+    return 1;
 }
