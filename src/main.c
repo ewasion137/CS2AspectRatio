@@ -3,24 +3,44 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
-#include "MinHook.h"
+#include "MinHook.h" // Убедись, что путь верный
 
-// Переменная для настройки (можешь потом вынести в конфиг)
-float my_aspect_ratio = 35.0f;
+// Значение для растяга. 
+// 1.333f — это 4:3 (будет жирно на 16:9 мониторе)
+// 1.0f — будет ОЧЕНЬ жирно
+// 1.777f — стандарт 16:9
+float my_aspect_ratio = 1.333333f;
 
-// Оригинальная функция, которую мы перехватим
-typedef float (__fastcall* GetAspectRatio_t)(void* rcx, int width, int height);
-GetAspectRatio_t oGetAspectRatio = NULL;
+// Структура рендера на основе данных с UnknownCheats
+struct CViewRender {
+    uint8_t  pad0[0x528];    // Смещение до AspectRatio
+    float    flAspectRatio;  // 0x528
+    uint8_t  pad1[0x71];     // Смещение до флагов
+    uint8_t  nSomeFlags;     // 0x59D (0x528 + 4 + 0x71)
+};
 
-// Наш Хук-заменитель
-float __fastcall Hooked_GetAspectRatio(void* rcx, int width, int height) {
-    // Если мы хотим выключить чит, можем вернуть оригинал:
-    // return oGetAspectRatio(rcx, width, height);
+// Прототип оригинальной функции
+typedef void* (__fastcall* CreateViewRender_t)(struct CViewRender* pViewRender);
+CreateViewRender_t oCreateViewRender = NULL;
 
-    return my_aspect_ratio; // Возвращаем наше кастомное значение
+// Наш НОВЫЙ хук для растяга (Stretched)
+void* __fastcall Hooked_CreateViewRender(struct CViewRender* pViewRender) {
+    // 1. Вызываем оригинал, чтобы игра заполнила структуру своими данными
+    void* ret = oCreateViewRender(pViewRender);
+
+    if (pViewRender != NULL) {
+        // 2. Устанавливаем наше значение
+        pViewRender->flAspectRatio = my_aspect_ratio;
+
+        // 3. САМОЕ ВАЖНОЕ: Ставим флаг "использовать кастомный Aspect Ratio"
+        // Без этого бита игра просто проигнорирует наше значение
+        pViewRender->nSomeFlags |= 2; 
+    }
+
+    return ret;
 }
 
-// Надежный сканер паттернов
+// Проверенный сканер паттернов
 uintptr_t FindPattern(const char* module, const char* pattern, const char* mask) {
     HMODULE hMod = GetModuleHandleA(module);
     if (!hMod) return 0;
@@ -48,53 +68,72 @@ DWORD WINAPI MainThread(LPVOID lpParam) {
     AllocConsole();
     freopen("CONOUT$", "w", stdout);
 
-    printf("[*] CS2 Aspect Ratio - Elite Refactor\n");
-    printf("[*] Initializing MinHook...\n");
+    printf("[*] CS2 FAT MODELS (True Stretched) - Loaded\n");
 
     if (MH_Initialize() != MH_OK) {
-        printf("[!] Failed to initialize MinHook\n");
+        printf("[!] MinHook failed to init!\n");
         return 0;
     }
 
-    // Сигнатура функции GetAspectRatio в engine2.dll
-    // 48 89 5C 24 ? 57 48 83 EC ? 8B FA 48 8D 0D
-    const char* pattern = "\x48\x89\x5C\x24\x00\x57\x48\x83\xEC\x00\x8B\xFA\x48\x8D\x0D";
-    const char* mask    = "xxxx?xxxx?xxxxx";
+    // 1. САМАЯ НОВАЯ сигнатура (Актуальная после последних апдейтов)
+    // IDA: 48 8B C4 48 89 58 ? 48 89 68 ? 48 89 70 ? 48 89 48
+    const char* pattern1 = "\x48\x8B\xC4\x48\x89\x58\x00\x48\x89\x68\x00\x48\x89\x70\x00\x48\x89\x48";
+    const char* mask1    = "xxxxxx?xxx?xxx?xxx";
 
-    uintptr_t target_addr = FindPattern("engine2.dll", pattern, mask);
+    // 2. АЛЬТЕРНАТИВНАЯ сигнатура (Которая была до этого)
+    // IDA: 48 89 5C 24 ? 48 89 6C 24 ? 56 57 41 56 48 83 EC ? 48 8B F1
+    const char* pattern2 = "\x48\x89\x5C\x24\x00\x48\x89\x6C\x24\x00\x56\x57\x41\x56\x48\x83\xEC\x00\x48\x8B\xF1";
+    const char* mask2    = "xxxx?xxxx?xxxxxxx?xxx";
 
-    if (target_addr) {
-        printf("[+] Found target at: %p\n", (void*)target_addr);
+    // 3. ТВОЯ СТАРАЯ сигнатура (на случай отката)
+    const char* pattern3 = "\x48\x89\x5C\x24\x10\x48\x89\x6C\x24\x18\x56\x57\x41\x56\x48\x83\xEC\x00\x4C\x8B\xF1\x48\x8D\x94\x24\x90\x00\x00\x00";
+    const char* mask3    = "xxxxxxxxxxxxxxxxx?xxxxxxxxxxx";
 
-        if (MH_CreateHook((void*)target_addr, &Hooked_GetAspectRatio, (void**)&oGetAspectRatio) == MH_OK) {
-            MH_EnableHook((void*)target_addr);
-            printf("[SUCCESS] Aspect Ratio Hook enabled!\n");
-        } else {
-            printf("[!] Failed to create hook.\n");
-        }
-    } else {
-        printf("[ERROR] Could not find signature in engine2.dll!\n");
-        printf("[TIP] Check if the game updated or search for signature manually in CE.\n");
+    // Ищем функцию перебирая актуальные сигнатуры
+    uintptr_t target_addr = FindPattern("client.dll", pattern1, mask1);
+    
+    if (!target_addr) {
+        target_addr = FindPattern("client.dll", pattern2, mask2);
+    }
+    if (!target_addr) {
+        target_addr = FindPattern("client.dll", pattern3, mask3);
     }
 
-    printf("[*] Press DELETE to unload.\n");
+    if (target_addr) {
+        printf("[+] Found CreateViewRender at: %p\n", (void*)target_addr);
+
+        if (MH_CreateHook((void*)target_addr, &Hooked_CreateViewRender, (void**)&oCreateViewRender) == MH_OK) {
+            MH_EnableHook((void*)target_addr);
+            printf("[SUCCESS] STRETCH HOOK ENABLED!\n");
+        } else {
+            printf("[ERROR] Failed to hook!\n");
+        }
+    } else {
+        printf("[ERROR] Could not find signature in client.dll!\n");
+    }
+
+    printf("[*] Keys: UP/DOWN to change Stretch, DELETE to Unload.\n");
 
     while (!(GetAsyncKeyState(VK_DELETE) & 1)) {
-        // Здесь можно добавить управление на стрелочки:
+        // Добавлено простенькое сглаживание кнопок (убрал залипание)
         if (GetAsyncKeyState(VK_UP) & 1) {
-            my_aspect_ratio += 0.1f;
-            printf("Current AR: %.2f\n", my_aspect_ratio);
+            my_aspect_ratio += 0.05f;
+            printf("Target AspectRatio: %.3f\n", my_aspect_ratio);
         }
         if (GetAsyncKeyState(VK_DOWN) & 1) {
-            my_aspect_ratio -= 0.1f;
-            printf("Current AR: %.2f\n", my_aspect_ratio);
+            my_aspect_ratio -= 0.05f;
+            printf("Target AspectRatio: %.3f\n", my_aspect_ratio);
         }
-        Sleep(100);
+        Sleep(10); // Снизил слип для лучшей реакции на клавиши
     }
 
     printf("[*] Unloading...\n");
     MH_DisableHook(MH_ALL_HOOKS);
     MH_Uninitialize();
+    
+    // Даем потокам игры завершить вызовы оригинальной функции перед выгрузкой
+    Sleep(200); 
+    
     FreeConsole();
     FreeLibraryAndExitThread((HMODULE)lpParam, 0);
     return 0;
